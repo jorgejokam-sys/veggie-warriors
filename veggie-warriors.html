@@ -672,11 +672,22 @@ function render() {
 function saveScore() {
   const name    = document.getElementById('nameInput').value.trim() || 'Anonymous';
   const records = JSON.parse(localStorage.getItem('veggieWarriorsLB') || '[]');
-  records.push({
-    name, score, level,
-    hero: heroType,
-    date: new Date().toLocaleDateString(),
-  });
+  const existing = records.find(r => r.name.toLowerCase() === name.toLowerCase());
+  if (existing) {
+    if (score <= existing.score) {
+      // Not a new high score — just go to leaderboard without changing anything
+      renderLeaderboard();
+      showScreen('sLeaderboard');
+      return;
+    }
+    // New high score for this name — update in place
+    existing.score = score;
+    existing.level = level;
+    existing.hero  = heroType;
+    existing.date  = new Date().toLocaleDateString();
+  } else {
+    records.push({ name, score, level, hero: heroType, date: new Date().toLocaleDateString() });
+  }
   records.sort((a, b) => b.score - a.score);
   records.splice(10);
   localStorage.setItem('veggieWarriorsLB', JSON.stringify(records));
