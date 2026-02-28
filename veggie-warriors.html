@@ -197,8 +197,9 @@ const HERO_SPEED       = 5;
 const SWORD_SPEED      = 14;
 const SWORD_COOLDOWN   = 18;   // frames between throws
 const POINTS_PER_LEVEL = 10;
-const HERO_HP          = 3;
+const HERO_HP          = 5;
 const INVINCIBLE_FRAMES = 90;
+const SPEED_MULT       = 0.7975;  // 20.25% slower
 
 const ENEMY_DEFS = [
   { emoji: '🍔', name: 'Hamburger', baseHp: 1, baseSpeed: 1.4, size: 44 },
@@ -353,7 +354,7 @@ function update() {
         deadSwords.add(si);
         if (e.hp <= 0) {
           deadEnemies.add(ei);
-          spawnParticles(e.x, e.y, '#ffdd00', 14);
+          spawnExplosion(e.x, e.y);
           score++;
           levelProgress++;
           updateHUD();
@@ -402,7 +403,7 @@ function spawnEnemy() {
     size:   def.size,
     hp:     def.baseHp + extraHp,
     maxHp:  def.baseHp + extraHp,
-    speed:  def.baseSpeed * speedMult,
+    speed:  def.baseSpeed * speedMult * SPEED_MULT,
     x:      W + def.size,
     y:      def.size / 2 + Math.random() * (H - def.size),
     phase:  Math.random() * Math.PI * 2,
@@ -421,6 +422,57 @@ function throwSword() {
     rot: angle,
   });
   swordCd = SWORD_COOLDOWN;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  AUDIO
+// ═══════════════════════════════════════════════════════════════
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+function playExplosionSound() {
+  try {
+    const ac       = getAudio();
+    const duration = 0.28;
+    const sr       = ac.sampleRate;
+    const buf      = ac.createBuffer(1, Math.floor(sr * duration), sr);
+    const data     = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const t = i / data.length;
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 1.8);
+    }
+    const src    = ac.createBufferSource();
+    src.buffer   = buf;
+    const lpf    = ac.createBiquadFilter();
+    lpf.type     = 'lowpass';
+    lpf.frequency.value = 420;
+    const gain   = ac.createGain();
+    gain.gain.setValueAtTime(0.45, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + duration);
+    src.connect(lpf); lpf.connect(gain); gain.connect(ac.destination);
+    src.start();
+  } catch (_) {}
+}
+
+function spawnExplosion(x, y) {
+  // Particle burst
+  spawnParticles(x, y, '#ffee00', 20);
+  spawnParticles(x, y, '#ff6600', 12);
+  spawnParticles(x, y, '#ff2200', 8);
+  // Expanding shockwave rings
+  for (let i = 0; i < 3; i++) {
+    const maxLife = 22 - i * 4;
+    particles.push({
+      x, y, vx: 0, vy: 0,
+      life: maxLife, maxLife,
+      startR: i * 6, endR: 60 + i * 18,
+      ring: true,
+      color: i === 0 ? '#ffee00' : '#ff6600',
+    });
+  }
+  playExplosionSound();
 }
 
 function spawnParticles(x, y, color, count = 6) {
@@ -483,27 +535,60 @@ function render() {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
   }
 
-  // Particles
+  // Particles (regular + rings)
   particles.forEach(p => {
-    ctx.globalAlpha = Math.max(0, p.life / 45);
-    ctx.fillStyle   = p.color;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
-    ctx.fill();
+    if (p.ring) {
+      const progress = 1 - p.life / p.maxLife;
+      const r        = p.startR + (p.endR - p.startR) * progress;
+      const alpha    = (p.life / p.maxLife) * 0.9;
+      ctx.save();
+      ctx.globalAlpha  = alpha;
+      ctx.strokeStyle  = p.color;
+      ctx.lineWidth    = 3 * (p.life / p.maxLife);
+      ctx.shadowBlur   = 18;
+      ctx.shadowColor  = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.globalAlpha = Math.max(0, p.life / 45);
+      ctx.fillStyle   = p.color;
+      ctx.shadowBlur  = 6;
+      ctx.shadowColor = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
   });
   ctx.globalAlpha = 1;
+  ctx.shadowBlur  = 0;
 
-  // Swords
+  // Swords — neon pink/blue flashing
+  const swordColor = Math.floor(frame / 6) % 2 === 0 ? '#ff10f0' : '#00efff';
   swords.forEach(s => {
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.rotate(s.rot);
-    ctx.font = '24px serif';
-    ctx.textAlign    = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('🗡️', 0, 0);
+    ctx.shadowBlur  = 18;
+    ctx.shadowColor = swordColor;
+    ctx.strokeStyle = swordColor;
+    ctx.fillStyle   = swordColor;
+    ctx.lineCap     = 'round';
+    // Blade
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(11, 0); ctx.stroke();
+    // Tip
+    ctx.beginPath(); ctx.moveTo(9, -3); ctx.lineTo(16, 0); ctx.lineTo(9, 3); ctx.closePath(); ctx.fill();
+    // Crossguard
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(-4, -7); ctx.lineTo(-4, 7); ctx.stroke();
+    // Handle
+    ctx.lineWidth = 3.5;
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-5, 0); ctx.stroke();
     ctx.restore();
   });
+  ctx.shadowBlur = 0;
 
   // Enemies
   enemies.forEach(e => {
