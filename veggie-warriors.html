@@ -148,9 +148,12 @@
       <h1>🥗 Veggie Warriors</h1>
       <p class="subtitle">Defend the world from the fast food invasion!</p>
       <h2>Choose Your Hero</h2>
-      <div class="hero-choice">
-        <button class="hero-btn selected" id="btnBanana" onclick="selectHero('banana')">🍌<span>Banana</span></button>
-        <button class="hero-btn" id="btnBroccoli" onclick="selectHero('broccoli')">🥦<span>Broccoli</span></button>
+      <div class="hero-choice" style="flex-wrap:wrap;justify-content:center;">
+        <button class="hero-btn selected" id="btnBanana"     onclick="selectHero('banana')">🍌<span>Banana</span></button>
+        <button class="hero-btn" id="btnBroccoli"            onclick="selectHero('broccoli')">🥦<span>Broccoli</span></button>
+        <button class="hero-btn" id="btnBlueberry"           onclick="selectHero('blueberry')">🫐<span>Blueberry</span></button>
+        <button class="hero-btn" id="btnApple"               onclick="selectHero('apple')">🍎<span>Apple</span></button>
+        <button class="hero-btn" id="btnAvocado"             onclick="selectHero('avocado')">🥑<span>Avocado</span></button>
       </div>
       <h2 style="margin-top:10px">Choose Your Weapon</h2>
       <div class="hero-choice">
@@ -225,7 +228,7 @@ const ENEMY_DEFS = [
   { emoji: '🍦', name: 'Ice Cream', baseHp: 3, baseSpeed: 0.9, size: 44 },
 ];
 
-const HERO_EMOJIS = { banana: '🍌', broccoli: '🥦' };
+const HERO_EMOJIS = { banana: '🍌', broccoli: '🥦', blueberry: '🫐', apple: '🍎', avocado: '🥑' };
 
 // ═══════════════════════════════════════════════════════════════
 //  STATE
@@ -256,8 +259,11 @@ let bombExplosions = [];
 // ═══════════════════════════════════════════════════════════════
 function selectHero(type) {
   heroType = type;
-  document.getElementById('btnBanana').classList.toggle('selected',   type === 'banana');
-  document.getElementById('btnBroccoli').classList.toggle('selected', type === 'broccoli');
+  document.getElementById('btnBanana').classList.toggle('selected',    type === 'banana');
+  document.getElementById('btnBroccoli').classList.toggle('selected',  type === 'broccoli');
+  document.getElementById('btnBlueberry').classList.toggle('selected', type === 'blueberry');
+  document.getElementById('btnApple').classList.toggle('selected',     type === 'apple');
+  document.getElementById('btnAvocado').classList.toggle('selected',   type === 'avocado');
 }
 
 function selectWeapon(type) {
@@ -855,7 +861,7 @@ function renderLeaderboard() {
             <td>${r.name}</td>
             <td style="color:#ffdd00;font-weight:bold">${r.score}</td>
             <td>${r.level}</td>
-            <td>${r.hero === 'banana' ? '🍌' : '🥦'}</td>
+            <td>${HERO_EMOJIS[r.hero] || '🍌'}</td>
             <td style="color:#555">${r.date}</td>
           </tr>`).join('')}
       </tbody>
