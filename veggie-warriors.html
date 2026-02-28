@@ -152,6 +152,12 @@
         <button class="hero-btn selected" id="btnBanana" onclick="selectHero('banana')">🍌<span>Banana</span></button>
         <button class="hero-btn" id="btnBroccoli" onclick="selectHero('broccoli')">🥦<span>Broccoli</span></button>
       </div>
+      <h2 style="margin-top:10px">Choose Your Weapon</h2>
+      <div class="hero-choice">
+        <button class="hero-btn selected" id="btnSword" onclick="selectWeapon('sword')">🗡️<span>Sword</span></button>
+        <button class="hero-btn" id="btnPan"   onclick="selectWeapon('pan')">🍳<span>Pan</span></button>
+        <button class="hero-btn" id="btnBomb"  onclick="selectWeapon('bomb')">💣<span>Bomb</span></button>
+      </div>
       <p class="instructions">
         ↑ ↓ or W S &mdash; move your hero<br>
         Click (or Space) &mdash; throw sword toward cursor<br>
@@ -200,6 +206,13 @@ const POINTS_PER_LEVEL = 10;
 const HERO_HP          = 5;
 const INVINCIBLE_FRAMES = 90;
 const SPEED_MULT       = 0.7975;  // 20.25% slower
+const BOMB_SPEED       = 8;
+const BOMB_MAX_DIST    = 480;
+const BOMB_RADIUS      = 88;     // 2 × burger size (44)
+const BOMB_LIFETIME    = 90;     // frames explosion zone persists (~1.5 s)
+const OIL_DROP_DIST    = 22;     // pixels between oil drops
+const OIL_RADIUS       = 22;
+const OIL_LIFETIME     = 60;     // 1 second at 60 fps
 
 const ENEMY_DEFS = [
   { emoji: '🍔', name: 'Hamburger', baseHp: 1, baseSpeed: 1.4, size: 44 },
@@ -234,6 +247,9 @@ let mouseY        = H / 2;
 let keys          = {};
 let levelUpTimer  = 0;   // frames to show "LEVEL UP!" overlay
 let animId        = null;
+let weaponType     = 'sword';
+let oilSpots       = [];
+let bombExplosions = [];
 
 // ═══════════════════════════════════════════════════════════════
 //  HERO SELECT
@@ -242,6 +258,13 @@ function selectHero(type) {
   heroType = type;
   document.getElementById('btnBanana').classList.toggle('selected',   type === 'banana');
   document.getElementById('btnBroccoli').classList.toggle('selected', type === 'broccoli');
+}
+
+function selectWeapon(type) {
+  weaponType = type;
+  document.getElementById('btnSword').classList.toggle('selected', type === 'sword');
+  document.getElementById('btnPan').classList.toggle('selected',   type === 'pan');
+  document.getElementById('btnBomb').classList.toggle('selected',  type === 'bomb');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -271,9 +294,11 @@ function startGame() {
   lastSpawnFrame = 0;
   swordCd       = 0;
   levelUpTimer  = 0;
-  enemies       = [];
-  swords        = [];
-  particles     = [];
+  enemies        = [];
+  swords         = [];
+  particles      = [];
+  oilSpots       = [];
+  bombExplosions = [];
 
   hero = {
     x: 80,
@@ -324,13 +349,24 @@ function update() {
     lastSpawnFrame = frame;
   }
 
-  // Move swords
-  swords = swords.filter(s => {
-    s.x  += s.vx;
-    s.y  += s.vy;
-    s.rot += 0.35;
-    return s.x > -40 && s.x < W + 40 && s.y > -40 && s.y < H + 40;
-  });
+  // Move projectiles — handle bomb range & pan oil drops
+  const kept = [];
+  for (const s of swords) {
+    s.x += s.vx; s.y += s.vy; s.rot += 0.35;
+    if (s.x < -40 || s.x > W + 40 || s.y < -40 || s.y > H + 40) continue;
+    if (s.type === 'bomb') {
+      s.dist += Math.hypot(s.vx, s.vy);
+      if (s.dist >= BOMB_MAX_DIST) { createBombExplosion(s.x, s.y); continue; }
+    } else if (s.type === 'pan') {
+      s.dist += Math.hypot(s.vx, s.vy);
+      if (s.dist - s.lastOilDrop >= OIL_DROP_DIST) {
+        oilSpots.push({ x: s.x, y: s.y, life: OIL_LIFETIME, maxLife: OIL_LIFETIME });
+        s.lastOilDrop = s.dist;
+      }
+    }
+    kept.push(s);
+  }
+  swords = kept;
 
   // Move enemies
   enemies = enemies.filter(e => {
@@ -339,7 +375,7 @@ function update() {
     return e.x > -e.size;
   });
 
-  // Sword ↔ enemy collisions
+  // Projectile ↔ enemy collisions
   const deadSwords  = new Set();
   const deadEnemies = new Set();
 
@@ -349,23 +385,62 @@ function update() {
       const s = swords[si], e = enemies[ei];
       const dx = s.x - e.x, dy = s.y - e.y;
       if (dx * dx + dy * dy < (e.size / 2 + 10) ** 2) {
-        e.hp--;
-        spawnParticles(e.x, e.y, '#ff8800', 5);
         deadSwords.add(si);
-        if (e.hp <= 0) {
-          deadEnemies.add(ei);
-          spawnExplosion(e.x, e.y);
-          score++;
-          levelProgress++;
-          updateHUD();
-          if (levelProgress >= POINTS_PER_LEVEL) doLevelUp();
+        if (s.type === 'bomb') {
+          createBombExplosion(s.x, s.y);  // AOE handles kills
+        } else {
+          e.hp--;
+          spawnParticles(e.x, e.y, '#ff8800', 5);
+          if (e.hp <= 0) {
+            deadEnemies.add(ei);
+            spawnExplosion(e.x, e.y);
+            score++; levelProgress++; updateHUD();
+            if (levelProgress >= POINTS_PER_LEVEL) doLevelUp();
+          }
         }
       }
     }
   }
-
   swords  = swords.filter((_,  i) => !deadSwords.has(i));
   enemies = enemies.filter((_, i) => !deadEnemies.has(i));
+
+  // Bomb explosion zone ↔ enemies
+  const killedByBomb = new Set();
+  for (const exp of bombExplosions) {
+    for (let ei = 0; ei < enemies.length; ei++) {
+      if (killedByBomb.has(ei)) continue;
+      const e = enemies[ei];
+      const dx = exp.x - e.x, dy = exp.y - e.y;
+      if (dx * dx + dy * dy < (exp.r + e.size / 2) ** 2) {
+        killedByBomb.add(ei);
+        spawnExplosion(e.x, e.y);
+        score++; levelProgress++; updateHUD();
+        if (levelProgress >= POINTS_PER_LEVEL) doLevelUp();
+      }
+    }
+  }
+  enemies = enemies.filter((_, i) => !killedByBomb.has(i));
+
+  // Oil spot ↔ enemies
+  const killedByOil = new Set();
+  for (const spot of oilSpots) {
+    for (let ei = 0; ei < enemies.length; ei++) {
+      if (killedByOil.has(ei)) continue;
+      const e = enemies[ei];
+      const dx = spot.x - e.x, dy = spot.y - e.y;
+      if (dx * dx + dy * dy < (OIL_RADIUS + e.size / 2) ** 2) {
+        killedByOil.add(ei);
+        spawnExplosion(e.x, e.y);
+        score++; levelProgress++; updateHUD();
+        if (levelProgress >= POINTS_PER_LEVEL) doLevelUp();
+      }
+    }
+  }
+  enemies = enemies.filter((_, i) => !killedByOil.has(i));
+
+  // Age bomb explosions & oil spots
+  bombExplosions = bombExplosions.filter(exp => { exp.life--; return exp.life > 0; });
+  oilSpots       = oilSpots.filter(s   => { s.life--;   return s.life   > 0; });
 
   // Enemy reaches hero
   enemies = enemies.filter(e => {
@@ -411,15 +486,19 @@ function spawnEnemy() {
   });
 }
 
-function throwSword() {
+function throwWeapon() {
   if (swordCd > 0 || !gameRunning) return;
   const angle = Math.atan2(mouseY - hero.y, mouseX - hero.x);
+  const speed = weaponType === 'bomb' ? BOMB_SPEED : SWORD_SPEED;
   swords.push({
+    type: weaponType,
     x:   hero.x + Math.cos(angle) * 36,
     y:   hero.y + Math.sin(angle) * 36,
-    vx:  Math.cos(angle) * SWORD_SPEED,
-    vy:  Math.sin(angle) * SWORD_SPEED,
+    vx:  Math.cos(angle) * speed,
+    vy:  Math.sin(angle) * speed,
     rot: angle,
+    dist: 0,
+    lastOilDrop: 0,
   });
   swordCd = SWORD_COOLDOWN;
 }
@@ -470,6 +549,23 @@ function spawnExplosion(x, y) {
       startR: i * 6, endR: 60 + i * 18,
       ring: true,
       color: i === 0 ? '#ffee00' : '#ff6600',
+    });
+  }
+  playExplosionSound();
+}
+
+function createBombExplosion(x, y) {
+  bombExplosions.push({ x, y, r: BOMB_RADIUS, life: BOMB_LIFETIME, maxLife: BOMB_LIFETIME });
+  spawnParticles(x, y, '#ff4400', 22);
+  spawnParticles(x, y, '#ffaa00', 14);
+  for (let i = 0; i < 4; i++) {
+    const maxLife = 30 - i * 5;
+    particles.push({
+      x, y, vx: 0, vy: 0,
+      life: maxLife, maxLife,
+      startR: 0, endR: BOMB_RADIUS + 15 + i * 18,
+      ring: true,
+      color: i < 2 ? '#ff6600' : '#ffcc00',
     });
   }
   playExplosionSound();
@@ -564,28 +660,71 @@ function render() {
   ctx.globalAlpha = 1;
   ctx.shadowBlur  = 0;
 
-  // Swords — neon pink/blue flashing
+  // Oil spots
+  oilSpots.forEach(s => {
+    const alpha = (s.life / s.maxLife) * 0.78;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, OIL_RADIUS);
+    g.addColorStop(0,   'rgba(200, 180, 20, 0.95)');
+    g.addColorStop(0.55,'rgba(110, 90, 10, 0.8)');
+    g.addColorStop(1,   'rgba(50, 40, 5, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y, OIL_RADIUS, OIL_RADIUS * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Bomb explosion zones
+  bombExplosions.forEach(exp => {
+    const alpha = exp.life / exp.maxLife;
+    ctx.save();
+    const g = ctx.createRadialGradient(exp.x, exp.y, 0, exp.x, exp.y, exp.r);
+    g.addColorStop(0,   `rgba(255, 200, 50, ${alpha * 0.45})`);
+    g.addColorStop(0.5, `rgba(255, 100,  0, ${alpha * 0.28})`);
+    g.addColorStop(1,   'rgba(255, 50, 0, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(exp.x, exp.y, exp.r, 0, Math.PI * 2); ctx.fill();
+    // Pulsing border ring
+    ctx.strokeStyle = `rgba(255, 150, 0, ${alpha * 0.9})`;
+    ctx.lineWidth   = 3;
+    ctx.shadowBlur  = 20;
+    ctx.shadowColor = '#ff6600';
+    const pulse = exp.r * (0.85 + 0.15 * Math.sin(frame * 0.25));
+    ctx.beginPath(); ctx.arc(exp.x, exp.y, pulse, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  });
+  ctx.shadowBlur = 0;
+
+  // Projectiles — swords (neon), pans, bombs
   const swordColor = Math.floor(frame / 6) % 2 === 0 ? '#ff10f0' : '#00efff';
   swords.forEach(s => {
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.rotate(s.rot);
-    ctx.shadowBlur  = 18;
-    ctx.shadowColor = swordColor;
-    ctx.strokeStyle = swordColor;
-    ctx.fillStyle   = swordColor;
-    ctx.lineCap     = 'round';
-    // Blade
-    ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(11, 0); ctx.stroke();
-    // Tip
-    ctx.beginPath(); ctx.moveTo(9, -3); ctx.lineTo(16, 0); ctx.lineTo(9, 3); ctx.closePath(); ctx.fill();
-    // Crossguard
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(-4, -7); ctx.lineTo(-4, 7); ctx.stroke();
-    // Handle
-    ctx.lineWidth = 3.5;
-    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-5, 0); ctx.stroke();
+    if (s.type === 'bomb') {
+      ctx.font = '26px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('💣', 0, 0);
+    } else if (s.type === 'pan') {
+      ctx.font = '28px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('🍳', 0, 0);
+    } else {
+      ctx.shadowBlur  = 18;
+      ctx.shadowColor = swordColor;
+      ctx.strokeStyle = swordColor;
+      ctx.fillStyle   = swordColor;
+      ctx.lineCap     = 'round';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(11, 0); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(9, -3); ctx.lineTo(16, 0); ctx.lineTo(9, 3); ctx.closePath(); ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-4, -7); ctx.lineTo(-4, 7); ctx.stroke();
+      ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-5, 0); ctx.stroke();
+    }
     ctx.restore();
   });
   ctx.shadowBlur = 0;
@@ -732,11 +871,11 @@ canvas.addEventListener('mousemove', e => {
   mouseY = (e.clientY - r.top)  * (H / r.height);
 });
 
-canvas.addEventListener('click', throwSword);
+canvas.addEventListener('click', throwWeapon);
 
 document.addEventListener('keydown', e => {
   keys[e.key] = true;
-  if (e.key === ' ') { e.preventDefault(); throwSword(); }
+  if (e.key === ' ') { e.preventDefault(); throwWeapon(); }
 });
 
 document.addEventListener('keyup', e => { keys[e.key] = false; });
